@@ -50,8 +50,8 @@ class DynamicsEnsemble(nn.Module):
         self.n_elites = n_elites
         self.terminal_fn = terminal_fn
         self.rnn = rnn
-        self.reward_penalty = reward_penalty
-        self.reward_penalty_weight = reward_penalty_weight
+        # self.reward_penalty = reward_penalty
+        # self.reward_penalty_weight = reward_penalty_weight
         self.classifier = classifier
         self.replay = replay
         self.threshold = threshold
@@ -119,12 +119,12 @@ class DynamicsEnsemble(nn.Module):
                 # Take mean over ensemble members' means
                 samples = torch.mean(means, dim=0)
 
-                reward_penalty = self.compute_reward_penalty(
-                    means,
-                    self.reward_penalty,
-                    obs_act,
-                    samples,
-                )
+                # reward_penalty = self.compute_reward_penalty(
+                #     means,
+                #     self.reward_penalty,
+                #     obs_act,
+                #     samples,
+                # )
 
             else:
                 samples = []
@@ -145,36 +145,36 @@ class DynamicsEnsemble(nn.Module):
                 # [B, obs_dim + reward_included] where each i \in B is from a randomly sampled ensemble member
                 samples = samples[idxs, np.arange(0, samples[0].shape[0])]
 
-                reward_penalty = self.compute_reward_penalty(
-                    means,
-                    self.reward_penalty,
-                    obs_act,
-                    samples,
-                )
+                # reward_penalty = self.compute_reward_penalty(
+                #     means,
+                #     self.reward_penalty,
+                #     obs_act,
+                #     samples,
+                # )
 
-        if self.reward_penalty == 'dual_classifier':
-            reward_penalty, prototypes, prototype_mask = reward_penalty
-            if prototypes is not None:
-                samples[prototype_mask, :-1] = prototypes
-
-        if self.reward_penalty == 'disagreement_threshold':
-            prototypes, prototype_mask = reward_penalty
-            if prototypes is not None:
-                samples[prototype_mask, :-1] = prototypes
-
-            reward_penalty = 0
-
-        if self.reward_penalty == 'plaus_no_disagreement':
-            prototypes, prototype_mask = reward_penalty
-            if prototypes is not None:
-                samples[prototype_mask, :-1] = prototypes
-
-            reward_penalty = 0
+        # if self.reward_penalty == 'dual_classifier':
+        #     reward_penalty, prototypes, prototype_mask = reward_penalty
+        #     if prototypes is not None:
+        #         samples[prototype_mask, :-1] = prototypes
+        #
+        # if self.reward_penalty == 'disagreement_threshold':
+        #     prototypes, prototype_mask = reward_penalty
+        #     if prototypes is not None:
+        #         samples[prototype_mask, :-1] = prototypes
+        #
+        #     reward_penalty = 0
+        #
+        # if self.reward_penalty == 'plaus_no_disagreement':
+        #     prototypes, prototype_mask = reward_penalty
+        #     if prototypes is not None:
+        #         samples[prototype_mask, :-1] = prototypes
+        #
+        #     reward_penalty = 0
 
         if self.reward_included:
             # Chopping of rewards
             rewards = samples[:, -1]
-            rewards = rewards - self.reward_penalty_weight * reward_penalty
+            # rewards = rewards - self.reward_penalty_weight * reward_penalty
 
         else:
             raise NotImplemented('Sorry!')
