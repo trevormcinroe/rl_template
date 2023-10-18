@@ -13,9 +13,10 @@ from utils.termination_fns import termination_fns
 import argparse
 from tqdm import tqdm
 import json
-import wandb
 import alternate_envs
+import wandb
 import dmc2gym
+import os
 
 
 args = argparse.ArgumentParser()
@@ -30,10 +31,15 @@ args.add_argument('--rl_updates_per', type=int)
 args.add_argument('--rl_alpha', type=float, default=0.1)
 args.add_argument('--rl_grad_clip', type=float, default=999999999)
 args.add_argument('--critic_norm', action='store_true')
-args.add_argument('--performance_stop', type=float, default=999999)
 args.add_argument('--save_rb', action='store_true')
 args.add_argument('--rl_initial_alpha', default=0.1, type=float)
 args.add_argument('--n_steps', type=int, default=50000)
+args.add_argument('--eval_rl_every', type=int)
+args.add_argument('--replay_capacity', type=int)
+args.add_argument('--n_seed_steps', type=int, default=1000)
+args.add_argument('--n_eval_episodes', type=int, default=10)
+args.add_argument('--rl_batch_size', type=int, default=512)
+args.add_argument('--real_ratio', type=float, default=0.5)
 args = args.parse_args()
 
 
@@ -119,16 +125,7 @@ action_dim = env.action_space.shape[0]
 device = 'cuda'
 
 """Replay"""
-if args.performance_stop > 50000:
-    env_replay_buffer = ReplayBuffer(1000000, state_dim, action_dim, device)
-
-if args.performance_stop < 99999:
-    env_replay_buffer = ReplayBuffer(1000000, state_dim, action_dim, device)
-
-    try:
-        dataset_collector = DatasetCollector('/disk/scratch1/tmcinroe/.d4rl', env, env_replay_buffer, args.env)
-    except:
-        dataset_collector = DatasetCollector('/disk/scratch2/tmcinroe/.d4rl', env, env_replay_buffer, args.env)
+env_replay_buffer = ReplayBuffer(args.replay_capacity, state_dim, action_dim, device)
 
 if not args.model_free:
     model_retain_epochs = 1
@@ -198,17 +195,9 @@ agent = SAC(
     state_dim, action_dim, agent_mlp, 'elu', args.critic_norm, -20, 2, 1e-4, 3e-4,
     3e-4, args.rl_initial_alpha, 0.99, 0.005, action_bounds, 256, 2, 2, None, device, args.rl_grad_clip
 )
-# n_rl_updates = 1
-rl_batch_size = 512
-real_ratio = 0.5
-eval_rl_every = 1000
-n_eval_episodes = 10
+
 
 """Logging"""
-import os
-import wandb
-import json
-
 with open(args.wandb_key, 'r') as f:
     API_KEY = json.load(f)['api_key']
 
@@ -230,18 +219,9 @@ if not args.model_free:
 
 agent.logger = wandb
 
-
-# collect_steps = args.rollout_batch_size * 2
-if 'humanoid' in args.env.lower() or 'hammer' in args.env or 'door' in args.env or 'relocate' in args.env or 'quadruped' in args.env:
-    # collect_steps = 50000
-    collect_steps = 1000
-
-else:
-    collect_steps = 1000
-
 steps = 0
-print(f'Prefilling buffer with {collect_steps} steps...')
-while steps < collect_steps:
+print(f'Prefilling buffer with {args.n_seed_steps} steps...\n')
+while steps < args.n_seed_steps:
     obs = env.reset()
     done = False
     while not done:
@@ -255,20 +235,10 @@ while steps < collect_steps:
 
         obs = next_obs
 
-if np.any(['pen' in args.env, 'door' in args.env, 'hammer' in args.env,
-                                       'relocate' in args.env]):
-    total_steps_to_train = 250000
-else:
-    total_steps_to_train = 50000
-
-if args.performance_stop < 99999:
-    total_steps_to_train = 1000000
-
 if args.model_free:
-
     eval_hist = []
     steps = 0
-    while steps < 1e7:
+    while steps < args.n_steps:
         done = False
         obs = env.reset()
 
@@ -285,15 +255,14 @@ if args.model_free:
 
             for _ in range(args.rl_updates_per):
                 agent.update(
-                    # preprocess_sac_batch(env_replay_buffer, model_replay_buffer, rl_batch_size, real_ratio),
-                    preprocess_sac_batch(env_replay_buffer, env_replay_buffer, rl_batch_size, real_ratio),
+                    preprocess_sac_batch(env_replay_buffer, env_replay_buffer, args.rl_batch_size, args.real_ratio),
                     steps
                 )
 
-            if steps % eval_rl_every == 0:
+            if steps % args.eval_rl_every == 0:
                 eval_rewards = []
 
-                for _ in range(n_eval_episodes):
+                for _ in range(args.n_eval_episodes):
                     eval_obs = eval_env.reset()
                     done = False
                     episode_reward = 0
@@ -379,15 +348,14 @@ else:
 
                 for _ in range(args.rl_updates_per):
                     agent.update(
-                        preprocess_sac_batch(env_replay_buffer, model_replay_buffer, rl_batch_size, real_ratio),
-                        # preprocess_sac_batch(env_replay_buffer, env_replay_buffer, rl_batch_size, real_ratio),
+                        preprocess_sac_batch(env_replay_buffer, model_replay_buffer, args.rl_batch_size, args.real_ratio),
                         steps
                     )
 
-                if steps % eval_rl_every == 0:
+                if steps % args.eval_rl_every == 0:
                     eval_rewards = []
 
-                    for _ in range(n_eval_episodes):
+                    for _ in range(args.n_eval_episodes):
                         eval_obs = eval_env.reset()
                         done = False
                         episode_reward = 0
@@ -413,17 +381,6 @@ else:
                     # print(
                     #     f'Step: {steps}, R: {np.mean(eval_rewards)}'
                     # )
-
-                    # Here, we want to save the replay buffer...
-                    if steps > cutoff:
-                        if np.mean(eval_rewards) >= args.performance_stop:
-                            dataset_collector._extract_dataset()
-
-                            with open(f'{dataset_collector.directory}/custom_datasets/{dataset_collector.env_name}.json', 'w') as f:
-                                json.dump(dataset_collector.dataset, f)
-
-                            # Now kill training
-                            qqq
 
                 steps += 1
                 pbar.update(1)

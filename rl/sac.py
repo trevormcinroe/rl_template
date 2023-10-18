@@ -194,7 +194,7 @@ class SAC:
     def update(self, batch, step):
         obs, action, next_obs, reward, not_done = batch
 
-        self.update_critic(obs, action, reward, next_obs, not_done, loss_weights)
+        self.update_critic(obs, action, reward, next_obs, not_done)
 
         if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs)
