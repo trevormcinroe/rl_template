@@ -40,6 +40,7 @@ args.add_argument('--n_seed_steps', type=int, default=1000)
 args.add_argument('--n_eval_episodes', type=int, default=10)
 args.add_argument('--rl_batch_size', type=int, default=512)
 args.add_argument('--real_ratio', type=float, default=0.5)
+args.add_argument('--exp_name', type=str)
 args = args.parse_args()
 
 
@@ -208,8 +209,7 @@ os.environ['WANDB_CONFIG_DIR'] = './wandb'
 algo_type = 'MF' if args.model_free else 'MB'
 
 wandb.init(
-            project='mujoco-sanity',
-            # project='testing-wandb',
+            project=args.exp_name,
             entity='trevor-mcinroe',
             name=f'{args.env}-{algo_type}-rl{args.rl_updates_per}-mtrain{args.model_train_freq}-ifreq{args.imagination_freq}-h{args.horizon}-rbs{args.rollout_batch_size}-{seed}',
         )
