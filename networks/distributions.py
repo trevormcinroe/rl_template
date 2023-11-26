@@ -26,7 +26,7 @@ class DistLayer(nn.Module):
 
     def forward(
             self, x: FloatTensor, moments: bool
-    ) -> Union[List[FloatTensor, FloatTensor], td.Distribution, List[FloatTensor, int]]:
+    ) -> Union[List[FloatTensor], td.Distribution, Union[FloatTensor, int]]:
         mu = self.lin_proj(x)
 
         if self.dist == 'normal':
