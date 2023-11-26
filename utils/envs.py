@@ -20,7 +20,7 @@ class DMCWrapper:
             reward += timestep.reward
         return self.extract_obs(timestep), reward, timestep.step_type == 2, {}
 
-    def extract_obs(self, timestep: Dict[str: Any]) -> np.array:
+    def extract_obs(self, timestep: Dict[str, Any]) -> np.array:
         return np.concatenate(list(timestep.observation.values()))
 
     # @property
