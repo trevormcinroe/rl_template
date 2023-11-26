@@ -113,7 +113,7 @@ class SAC:
 
     def act(
             self, obs: Union[np.array, FloatTensor], sample: bool = False, return_dist: bool = False
-    ) -> Tuple[np.array, Optional[td.distribution]]:
+    ) -> Tuple[np.array, Optional[td.Distribution]]:
         # if not isinstance(obs, torch.Tensor):
         obs = torch.FloatTensor(obs).to(self.device)
         obs = obs.unsqueeze(0)
