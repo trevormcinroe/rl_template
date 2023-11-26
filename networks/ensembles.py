@@ -17,7 +17,8 @@ class DynamicsEnsemble(nn.Module):
     def __init__(self, n_ensemble_members: int, obs_dim: int, act_dim: int, hidden_dims: List[int], activation: str,
                  norm: bool, dist: str, max_logging: int, reward_included: bool, predict_difference: bool,
                  batch_size: int, lr: float, early_stop_patience: int, n_elites: int,
-                 terminal_fn: Union[Callable, None], rnn: bool, logger: wandb, lcc: nn.Module, device: str) -> None:
+                 terminal_fn: Union[Callable, None], rnn: bool, logger: wandb, lcc: Union[nn.Module, None],
+                 device: str) -> None:
         """
 
         Args:

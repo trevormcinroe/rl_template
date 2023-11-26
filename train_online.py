@@ -163,13 +163,6 @@ if not args.model_free:
     else:
         dyn_mlp = 200
 
-    print(f'Dyn mlp: {dyn_mlp}\n')
-    dynamics_ens = DynamicsEnsemble(
-        7, state_dim, action_dim, [dyn_mlp for _ in range(4)], 'elu', False, 'normal', 5000,
-        True, True, 512, 0.001, 10, 5, None, False, None, 1, None, None, None,
-        0, None, device
-    )
-
     try:
         termination_fn = termination_fns[args.env.split('-')[0]]
     except:
@@ -178,8 +171,15 @@ if not args.model_free:
         else:
             termination_fn = None
 
+    print(f'Dyn mlp: {dyn_mlp}\n')
+    dynamics_ens = DynamicsEnsemble(
+        n_ensemble_members=7, obs_dim=state_dim, act_dim=action_dim, hidden_dims=[dyn_mlp for _ in range(4)],
+        activation='elu', norm=False, dist='normal', max_logging=5000, reward_included=True, predict_difference=True,
+        batch_size=512, lr=1e-3, early_stop_patience=10, n_elites=5, terminal_fn=termination_fn, rnn=False, logger=None,
+        lcc=None, device=device
+    )
 
-print(f'Using termination function: {termination_fn}')
+    print(f'Using termination function: {termination_fn}')
 
 """RL"""
 if 'humanoid' in args.env.lower() or 'ant' in args.env.lower() or 'hammer' in args.env or 'door' in args.env or 'relocate' in args.env or 'quadruped' in args.env:
