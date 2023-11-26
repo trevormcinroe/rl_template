@@ -1,12 +1,13 @@
 import torch
-from torch import nn
+from torch import nn, FloatTensor
 import torch.nn.functional as F
 import torch.distributions as td
 import math
+from typing import Union, List
 
 
 class DistLayer(nn.Module):
-    def __init__(self, input_shape, output_shape, dist):
+    def __init__(self, input_shape: int, output_shape: int, dist: str) -> None:
         super().__init__()
         self.dist = dist
         self.lin_proj = nn.Linear(input_shape, output_shape)
@@ -23,7 +24,9 @@ class DistLayer(nn.Module):
                 requires_grad=True
             )
 
-    def forward(self, x, moments):
+    def forward(
+            self, x: FloatTensor, moments: bool
+    ) -> Union[List[FloatTensor, FloatTensor], td.Distribution, List[FloatTensor, int]]:
         mu = self.lin_proj(x)
 
         if self.dist == 'normal':
@@ -52,7 +55,6 @@ class DistLayer(nn.Module):
             if moments:
                 pass
 
-
         elif self.dist == 'trunc_normal':
             logvar = self.std_proj(x)
             logvar = self.max_logvar - F.softplus(self.max_logvar - logvar)
@@ -72,32 +74,32 @@ class TanhTransform(td.transforms.Transform):
     bijective = True
     sign = +1
 
-    def __init__(self, cache_size=1):
+    def __init__(self, cache_size: int = 1) -> None:
         super().__init__(cache_size=cache_size)
 
     @staticmethod
-    def atanh(x):
+    def atanh(x: FloatTensor) -> FloatTensor:
         return 0.5 * (x.log1p() - (-x).log1p())
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, TanhTransform)
 
-    def _call(self, x):
+    def _call(self, x: FloatTensor) -> FloatTensor:
         return x.tanh()
 
-    def _inverse(self, y):
+    def _inverse(self, y: FloatTensor) -> FloatTensor:
         # We do not clamp to the boundary here as it may degrade the performance of certain algorithms.
         # one should use `cache_size=1` instead
         return self.atanh(y)
 
-    def log_abs_det_jacobian(self, x, y):
+    def log_abs_det_jacobian(self, x: FloatTensor, y: FloatTensor) -> FloatTensor:
         # We use a formula that is more numerically stable, see details in the following link
-        # https://github.com/tensorflow/probability/commit/ef6bb176e0ebd1cf6e25c6b5cecdd2428c22963f#diff-e120f70e92e6741bca649f04fcd907b7
+        # https://github.com/tensorflow/probability/commit/ef6bb176e0ebd1cf6e25c6b5cecdd2428c22963f#diff-e120f70e92e6741bca649f04fcd907b7  # noqa
         return 2. * (math.log(2.) - x - F.softplus(-2. * x))
 
 
 class SquashedNormal(td.transformed_distribution.TransformedDistribution):
-    def __init__(self, loc, scale):
+    def __init__(self, loc: FloatTensor, scale: FloatTensor) -> None:
         self.loc = loc
         self.scale = scale
 
@@ -106,11 +108,11 @@ class SquashedNormal(td.transformed_distribution.TransformedDistribution):
         super().__init__(self.base_dist, transforms)
 
     @property
-    def mean(self):
+    def mean(self) -> FloatTensor:
         mu = self.loc
         for tr in self.transforms:
             mu = tr(mu)
         return mu
 
-    def entropy(self):
+    def entropy(self) -> FloatTensor:
         return self.base_dist.entropy()

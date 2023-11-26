@@ -1,14 +1,17 @@
 import torch
-from torch import nn
+from torch import nn, FloatTensor, Tensor, LongTensor
 import torch.nn.functional as F
 import torch.distributions as td
 import numpy as np
 from networks.utils.activations import get_activation
 from networks.distributions import SquashedNormal
+from typing import Union, List, Tuple, Optional
+import wandb
 
 
 class Actor(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_dims, activation, norm, logvar_min, logvar_max):
+    def __init__(self, obs_dim: int, action_dim: int, hidden_dims: List[int], activation: str, norm: bool,
+                 logvar_min: int, logvar_max: int) -> None:
         super().__init__()
         self.logvar_min = logvar_min
         self.logvar_max = logvar_max
@@ -25,7 +28,7 @@ class Actor(nn.Module):
         self.layers.append(get_activation(activation))
         self.layers.append(nn.Linear(hidden_dims[-1], action_dim * 2))
 
-    def forward(self, x):
+    def forward(self, x: FloatTensor) -> td.Distribution:
         for layer in self.layers:
             x = layer(x)
 
@@ -38,7 +41,7 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_dims, activation, norm):
+    def __init__(self, obs_dim: int, action_dim: int, hidden_dims: List[int], activation: str, norm: bool) -> None:
         super().__init__()
 
         self.layers = nn.ModuleList([nn.Linear(obs_dim + action_dim, hidden_dims[0])])
@@ -55,27 +58,29 @@ class Critic(nn.Module):
         self.layers.append(get_activation(activation))
         self.layers.append(nn.Linear(hidden_dims[-1], 1))
 
-    def forward(self, x):
+    def forward(self, x: FloatTensor) -> FloatTensor:
         for layer in self.layers:
             x = layer(x)
         return x
 
 
 class DoubleQ(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_dims, activation, norm):
+    def __init__(self, obs_dim: int, action_dim: int, hidden_dims: List[int], activation: str, norm: bool) -> None:
         super().__init__()
 
         self.q1 = Critic(obs_dim, action_dim, hidden_dims, activation, norm)
         self.q2 = Critic(obs_dim, action_dim, hidden_dims, activation, norm)
 
-    def forward(self, x):
+    def forward(self, x: FloatTensor) -> Tuple[FloatTensor, FloatTensor]:
         return self.q1(x), self.q2(x)
 
 
 class SAC:
-    def __init__(self, obs_dim, action_dim, hidden_dims, activation, norm, logvar_min, logvar_max, actor_lr, critic_lr,
-                 alpha_lr, init_temperature, gamma, tau, action_range, batch_size, actor_update_freq,
-                 critic_target_update_freq, logger, device, grad_clip):
+    def __init__(self, obs_dim: int, action_dim: int, hidden_dims: List[int], activation: str, norm: bool,
+                 logvar_min: int, logvar_max: int, actor_lr: float, critic_lr: float, alpha_lr: float,
+                 init_temperature: float, gamma: float, tau: float, action_range: List[float], batch_size: int,
+                 actor_update_freq: int, critic_target_update_freq: int, logger: wandb, device: str,
+                 grad_clip: Union[int, bool]) -> None:
         self.actor = Actor(obs_dim, action_dim, hidden_dims, activation, False, logvar_min, logvar_max).to(device)
 
         self.critic = DoubleQ(obs_dim, action_dim, hidden_dims, activation, norm).to(device)
@@ -103,10 +108,12 @@ class SAC:
         self.grad_clip = grad_clip
 
     @property
-    def alpha(self):
+    def alpha(self) -> FloatTensor:
         return self.log_alpha.exp()
 
-    def act(self, obs, sample=False, return_dist=False):
+    def act(
+            self, obs: Union[np.array, FloatTensor], sample: bool = False, return_dist: bool = False
+    ) -> Tuple[np.array, Optional[td.distribution]]:
         # if not isinstance(obs, torch.Tensor):
         obs = torch.FloatTensor(obs).to(self.device)
         obs = obs.unsqueeze(0)
@@ -119,7 +126,8 @@ class SAC:
         else:
             return action[0].detach().cpu().numpy(), dist
 
-    def update_critic(self, obs, action, reward, next_obs, not_done):
+    def update_critic(self, obs: FloatTensor, action: FloatTensor, reward: FloatTensor, next_obs: FloatTensor,
+                      not_done: LongTensor) -> None:
         # self.logger.log({'batch_reward': reward.mean().item()})
 
         with torch.no_grad():
@@ -157,7 +165,7 @@ class SAC:
 
         self.critic_optim.step()
 
-    def update_actor_and_alpha(self, obs):
+    def update_actor_and_alpha(self, obs: FloatTensor) -> None:
         dist = self.actor(obs)
         action = dist.rsample()
         log_prob = dist.log_prob(action).sum(-1, keepdim=True)
@@ -191,7 +199,7 @@ class SAC:
 
         # self.logger.log({'alpha': self.alpha.item()})
 
-    def update(self, batch, step):
+    def update(self, batch: Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, LongTensor], step: int) -> None:
         obs, action, next_obs, reward, not_done = batch
 
         self.update_critic(obs, action, reward, next_obs, not_done)
@@ -203,7 +211,7 @@ class SAC:
             for param, target_param in zip(self.critic.parameters(), self.target_critic.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
 
-    def save(self, filename):
+    def save(self, filename: str) -> None:
         """
 
         Args:
@@ -220,7 +228,7 @@ class SAC:
         torch.save(self.critic_optim.state_dict(), f'{filename}_critic_optim.pt')
         torch.save(self.log_alpha_optimizer.state_dict(), f'{filename}_alpha_optim.pt')
 
-    def load(self, filename):
+    def load(self, filename: str) -> None:
         """
 
         Returns:

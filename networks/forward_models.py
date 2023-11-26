@@ -1,11 +1,13 @@
 import torch
-from torch import nn
+from torch import nn, FloatTensor, Tensor
 from networks.utils.activations import get_activation
 from networks.distributions import DistLayer
+from typing import List, Union, Tuple
 
 
 class MLP(nn.Module):
-    def __init__(self, input_shape, hidden_dims, output_shape, activation, norm, dist):
+    def __init__(self, input_shape: int, hidden_dims: List[int], output_shape: int, activation: str, norm: bool,
+                 dist: bool) -> None:
         """
 
         Args:
@@ -34,14 +36,14 @@ class MLP(nn.Module):
             self.dist_layer = DistLayer(hidden_dims[-1], output_shape, dist)
 
     @property
-    def max_logvar(self):
+    def max_logvar(self) -> FloatTensor:
         return self.dist_layer.max_logvar
 
     @property
-    def min_logvar(self):
+    def min_logvar(self) -> FloatTensor:
         return self.dist_layer.min_logvar
 
-    def forward(self, x, moments=True):
+    def forward(self, x: FloatTensor, moments: bool = True) -> FloatTensor:
         for layer in self.layers:
             x = layer(x)
 
@@ -52,7 +54,8 @@ class MLP(nn.Module):
 
 
 class GRU(nn.Module):
-    def __init__(self, obs_dim, action_dim, reward_included, norm, activation, dist, update_bias=-1):
+    def __init__(self, obs_dim: int, action_dim: int, reward_included: bool, norm: bool, activation: str, dist: bool,
+                 update_bias: int = -1) -> None:
         super().__init__()
         self.dist = dist
         self._matrix = nn.Linear(obs_dim + action_dim, obs_dim * 3, bias=not norm)
@@ -68,19 +71,19 @@ class GRU(nn.Module):
         if dist:
             self.dist_layer = DistLayer(obs_dim, obs_dim + reward_included, dist)
 
-    def get_initial_state(self, batch_size):
+    def get_initial_state(self, batch_size: int) -> Tensor:
         """"""
         return torch.zeros((batch_size, self._obs_dim))
 
     @property
-    def max_logvar(self):
+    def max_logvar(self) -> FloatTensor:
         return self.dist_layer.max_logvar
 
     @property
-    def min_logvar(self):
+    def min_logvar(self) -> FloatTensor:
         return self.dist_layer.min_logvar
 
-    def forward(self, inputs, state, moments=True):
+    def forward(self, inputs: FloatTensor, state: FloatTensor, moments: bool = True) -> FloatTensor:
         h = self._matrix(torch.cat([inputs, state], dim=-1))
 
         if self._norm:
@@ -98,7 +101,3 @@ class GRU(nn.Module):
             output = self.dist_layer(output, moments)
 
         return output
-
-
-
-

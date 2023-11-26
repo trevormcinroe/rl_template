@@ -1,18 +1,23 @@
 import torch
-from torch import nn
+from torch import nn, FloatTensor, LongTensor
 import torch.nn.functional as F
 import numpy as np
 from networks.forward_models import MLP, GRU
 from networks.distributions import DistLayer
 import torch.distributions as td
 from utils.scalers import StandardScaler
+from utils.replays import ReplayBuffer
 from copy import deepcopy
+from typing import Union, Callable, List, Tuple
+import wandb
+from rl.sac import Actor
 
 
 class DynamicsEnsemble(nn.Module):
-    def __init__(self, n_ensemble_members, obs_dim, act_dim, hidden_dims, activation, norm, dist, max_logging,
-                 reward_included, predict_difference, batch_size, lr, early_stop_patience, n_elites, terminal_fn,
-                 rnn, reward_penalty, reward_penalty_weight, classifier, replay, logger, threshold, lcc, device):
+    def __init__(self, n_ensemble_members: int, obs_dim: int, act_dim: int, hidden_dims: List[int], activation: str,
+                 norm: bool, dist: str, max_logging: int, reward_included: bool, predict_difference: bool,
+                 batch_size: int, lr: float, early_stop_patience: int, n_elites: int,
+                 terminal_fn: Union[Callable, None], rnn: bool, logger: wandb, lcc: nn.Module, device: str) -> None:
         """
 
         Args:
@@ -32,12 +37,7 @@ class DynamicsEnsemble(nn.Module):
             n_elites
             terminal_fn
             rnn:
-            reward_penalty:
-            reward_penalty_weight:
-            classifier:
-            replay:
             logger:
-            threshold:
             lcc:
             device:
         """
@@ -50,11 +50,6 @@ class DynamicsEnsemble(nn.Module):
         self.n_elites = n_elites
         self.terminal_fn = terminal_fn
         self.rnn = rnn
-        # self.reward_penalty = reward_penalty
-        # self.reward_penalty_weight = reward_penalty_weight
-        self.classifier = classifier
-        self.replay = replay
-        self.threshold = threshold
         self.logger = logger
         self.lcc = lcc
         self.obs_dim = obs_dim
@@ -88,7 +83,9 @@ class DynamicsEnsemble(nn.Module):
 
         self.selected_elites = np.array([i for i in range(n_ensemble_members)])
 
-    def step(self, observations, actions, deterministic):
+    def step(
+            self, observations: FloatTensor, actions: FloatTensor, deterministic: bool
+    ) -> Tuple[FloatTensor, FloatTensor, FloatTensor, dict]:
         """
         Performs a single step
 
@@ -119,13 +116,6 @@ class DynamicsEnsemble(nn.Module):
                 # Take mean over ensemble members' means
                 samples = torch.mean(means, dim=0)
 
-                # reward_penalty = self.compute_reward_penalty(
-                #     means,
-                #     self.reward_penalty,
-                #     obs_act,
-                #     samples,
-                # )
-
             else:
                 samples = []
                 means = []
@@ -144,32 +134,6 @@ class DynamicsEnsemble(nn.Module):
 
                 # [B, obs_dim + reward_included] where each i \in B is from a randomly sampled ensemble member
                 samples = samples[idxs, np.arange(0, samples[0].shape[0])]
-
-                # reward_penalty = self.compute_reward_penalty(
-                #     means,
-                #     self.reward_penalty,
-                #     obs_act,
-                #     samples,
-                # )
-
-        # if self.reward_penalty == 'dual_classifier':
-        #     reward_penalty, prototypes, prototype_mask = reward_penalty
-        #     if prototypes is not None:
-        #         samples[prototype_mask, :-1] = prototypes
-        #
-        # if self.reward_penalty == 'disagreement_threshold':
-        #     prototypes, prototype_mask = reward_penalty
-        #     if prototypes is not None:
-        #         samples[prototype_mask, :-1] = prototypes
-        #
-        #     reward_penalty = 0
-        #
-        # if self.reward_penalty == 'plaus_no_disagreement':
-        #     prototypes, prototype_mask = reward_penalty
-        #     if prototypes is not None:
-        #         samples[prototype_mask, :-1] = prototypes
-        #
-        #     reward_penalty = 0
 
         if self.reward_included:
             # Chopping of rewards
@@ -192,7 +156,9 @@ class DynamicsEnsemble(nn.Module):
 
         return next_obs, rewards, terminals, {}
 
-    def rnn_step(self, observations, actions, deterministic):
+    def rnn_step(
+            self, observations: FloatTensor, actions: FloatTensor, deterministic: bool
+    ) -> Tuple[FloatTensor, FloatTensor, FloatTensor, dict]:
         """"""
         with torch.no_grad():
             if deterministic:
@@ -241,7 +207,8 @@ class DynamicsEnsemble(nn.Module):
 
         return next_obs, rewards, terminals, {}
 
-    def train_single_step(self, replay_buffer, validation_ratio, batch_size, online_buffer=None):
+    def train_single_step(self, replay_buffer: ReplayBuffer, validation_ratio: float, batch_size: int,
+                          online_buffer: ReplayBuffer = None) -> List[float]:
         """
         Trains the ensemble of dynamics models with single-step predictions only!
         Here, each member of the ensemble is guaranteed to see the different training data?
@@ -249,6 +216,7 @@ class DynamicsEnsemble(nn.Module):
             replay_buffer:
             validation_ratio:
             batch_size:
+            online_buffer:
 
         Returns:
 
@@ -364,7 +332,9 @@ class DynamicsEnsemble(nn.Module):
         self.set_elites(sorted_idxs[:self.n_elites])
         return loss_hist
 
-    def train_multi_step(self, replay_buffer, validation_ratio, horizon, episode_length):
+    def train_multi_step(
+            self, replay_buffer: ReplayBuffer, validation_ratio: float, horizon: int, episode_length: int
+    ) -> List[float]:
         """
         Trains the ensemble of dynamics models with multiple single-step predictions strung together
         Here, each member of the ensemble is guaranteed to see different transitions
@@ -493,11 +463,12 @@ class DynamicsEnsemble(nn.Module):
         val_losses = self.evaluate_traj(val_inputs, val_targets, recurrent_states_val)
         sorted_idxs = np.argsort(val_losses)
         self.set_elites(sorted_idxs[:self.n_elites])
+        return loss_hist
 
-    def set_elites(self, selected_idxs):
+    def set_elites(self, selected_idxs: List[int]) -> None:
         self.selected_elites = np.array(selected_idxs)
 
-    def _is_early_stop(self, new_val_loss):
+    def _is_early_stop(self, new_val_loss: List[float]) -> bool:
         # print(new_val_loss)
         changed = False
         for i, old_loss, new_loss in zip(range(len(self.val_loss)), self.val_loss, new_val_loss):
@@ -516,7 +487,7 @@ class DynamicsEnsemble(nn.Module):
             return False
 
     @torch.no_grad()
-    def evaluate(self, inputs, targets, idxs):
+    def evaluate(self, inputs: FloatTensor, targets: FloatTensor, idxs: Union[List[int], None]) -> np.array:
         if idxs is not None:
             means = []
             for i in range(self.n_ensemble_members):
@@ -538,7 +509,7 @@ class DynamicsEnsemble(nn.Module):
         return loss.cpu().numpy()
 
     @torch.no_grad()
-    def evaluate_traj(self, inputs, targets, real_states):
+    def evaluate_traj(self, inputs: FloatTensor, targets: FloatTensor) -> np.array:
         losses = []
         # TODO: do we eval based off of the means?
         means = []
@@ -561,12 +532,14 @@ class DynamicsEnsemble(nn.Module):
         return np.array(losses)
 
     @staticmethod
-    def shuffle_rows(arr):
+    def shuffle_rows(arr: np.array) -> np.array:
         """ Shuffle among rows. This will keep distinct training for each ensemble."""
         idxs = np.argsort(np.random.uniform(size=arr.shape), axis=-1)
         return arr[np.arange(arr.shape[0])[:, None], idxs]
 
-    def preprocess_training_batch(self, data):
+    def preprocess_training_batch(
+            self, data: Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, LongTensor]
+    ) -> Tuple[FloatTensor, FloatTensor]:
         # TODO: rename. also used for val
         """
 
@@ -578,6 +551,7 @@ class DynamicsEnsemble(nn.Module):
         Returns:
 
         """
+
         # TODO: check if this still works well for traj data
         states, actions, next_states, rewards, not_dones = data
 
@@ -597,8 +571,11 @@ class DynamicsEnsemble(nn.Module):
 
         return inputs, target
 
-    def preprocess_training_batch_traj(self, data):
+    def preprocess_training_batch_traj(
+            self, data: Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, LongTensor]
+    ) -> List[FloatTensor, FloatTensor]:
         """"""
+        raise NotImplementedError('Currently this function is not fully implemented.')
         # For a trajectory, the inputs are simply the [recurrent state, action] vectors
         states, actions, next_states, rewards, not_dones = data
         inputs = actions
@@ -617,7 +594,9 @@ class DynamicsEnsemble(nn.Module):
 
         return inputs, target
 
-    def imagine(self, rollout_batch_size, horizon, policy, env_replay_buffer, model_replay_buffer, termination_fn, rnd, search_replay_buffer=None):
+    def imagine(self, rollout_batch_size: int, horizon: int, policy: Actor, env_replay_buffer: ReplayBuffer,
+                model_replay_buffer: ReplayBuffer, termination_fn: Union[Callable, None], rnd: bool,
+                search_replay_buffer: Union[ReplayBuffer, None] = None) -> None:
         """
         Adds experiences to the model_replay_buffer using imagined trajectories
         Args:
@@ -627,6 +606,7 @@ class DynamicsEnsemble(nn.Module):
             env_replay_buffer:
             model_replay_buffer:
             termination_fn:
+            search_replay_buffer:
 
         Returns:
 
@@ -726,7 +706,7 @@ class DynamicsEnsemble(nn.Module):
         # return {"Rollout": mean_rollout_length}
 
     @torch.no_grad()
-    def measure_disagreement(self, input, target):
+    def measure_disagreement(self, input: FloatTensor, target: FloatTensor) -> Tuple[FloatTensor, float, dict]:
         """"""
         samples = []
 
@@ -774,28 +754,9 @@ class DynamicsEnsemble(nn.Module):
                     errors.append(error.mean().cpu().item())
                     error_dict[i] = error.mean().cpu().item()
                 return disagreement, np.mean(errors), error_dict
-            return disagreement
+
+            return disagreement, 0, {}
 
         # Here be trajectories
         else:
-            for i in range(self.n_ensemble_members):
-                inner = []
-                for j in range(input.shape[1]):
-                    if j == 0:
-                        state = self.forward_models[0].get_initial_state(input.shape[0]).to(self.device)
-                    state = self.forward_models[i](
-                        input[:, j, :], state, moments=False
-                    ).rsample()
-
-                    inner.append(state.unsqueeze(1))
-                    state = state[:, :-1]
-
-                samples.append(torch.cat(inner, dim=1).unsqueeze(0))
-
-            # [n_ens, B, T, state_dim + with_reward]
-            samples = torch.cat(samples, dim=0)
-
-            # mean across all ensemble members [B, T, state_dim + with_reward]
-            mean = samples.mean(0)
-
-            return (samples - mean).pow(2).sum(-1).mean([0, 1])
+            raise NotImplementedError('RNN pathway for measure_disagreement() method is not implemented.')

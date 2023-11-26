@@ -1,11 +1,16 @@
+from typing import Union, List, Tuple
+import numpy as np
+from torch import FloatTensor
+
+
 class StandardScaler:
     """ Used to calculate mean, std and normalize data. """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.mean = None
         self.std = None
 
-    def fit(self, data, traj=False):
+    def fit(self, data: Union[FloatTensor, np.array], traj: bool = False) -> None:
         """ Calculate mean and std for given data."""
         if not traj:
             self.mean = data.mean(0, keepdim=True)  # calculate mean among batch
@@ -16,12 +21,12 @@ class StandardScaler:
             self.std = data.std([0, 1], keepdim=True)
             self.std[self.std < 1e-12] = 1.0
 
-    def transform(self, data):
+    def transform(self, data: Union[FloatTensor, np.array]) -> Union[FloatTensor, np.array]:
         """ Normalization. """
         return (data - self.mean) / self.std
 
-    def transform_std_only(self, data):
+    def transform_std_only(self, data: Union[FloatTensor, np.array]) -> Union[FloatTensor, np.array]:
         return data / self.std
 
-    def inverse_transform(self, data):
+    def inverse_transform(self, data: Union[FloatTensor, np.array]) -> Union[FloatTensor, np.array]:
         return data * self.std + self.mean

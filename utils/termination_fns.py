@@ -1,10 +1,14 @@
 import numpy as np
 import torch
+from torch import FloatTensor, BoolTensor
+from typing import Union
 
 """DONE BS: [bs, 1]"""
 
 
-def hopper_term_fn(obs, act, next_obs):
+def hopper_term_fn(
+        obs: Union[FloatTensor, np.array], act: Union[FloatTensor, np.array], next_obs: Union[FloatTensor, np.array]
+) -> BoolTensor:
     # assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
 
     height = next_obs[:, 0]
@@ -19,7 +23,9 @@ def hopper_term_fn(obs, act, next_obs):
     return done
 
 
-def walker2d_term_fn(obs, action, next_obs):
+def walker2d_term_fn(
+        obs: Union[FloatTensor, np.array], action: Union[FloatTensor, np.array], next_obs: Union[FloatTensor, np.array]
+) -> BoolTensor:
     height = next_obs[:, 0]
     angle = next_obs[:, 1]
     not_done = (height > 0.8) \
@@ -31,7 +37,9 @@ def walker2d_term_fn(obs, action, next_obs):
     return done
 
 
-def humanoidtruncobs_term_fn(obs, act, next_obs):
+def humanoidtruncobs_term_fn(
+    obs: Union[FloatTensor, np.array], action: Union[FloatTensor, np.array], next_obs: Union[FloatTensor, np.array]
+) -> BoolTensor:
     # assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
 
     z = next_obs[:, 0]
@@ -43,11 +51,15 @@ def humanoidtruncobs_term_fn(obs, act, next_obs):
     return done
 
 
-def fake_term_fn(obs, act, next_obs):
+def fake_term_fn(
+    obs: Union[FloatTensor, np.array], action: Union[FloatTensor, np.array], next_obs: Union[FloatTensor, np.array]
+) -> BoolTensor:
     # [100k, 1]
     return torch.ones((next_obs.shape[0], 1)).to(next_obs.device).bool()
 
-def anttruncobs_term_fn(obs, act, next_obs):
+def anttruncobs_term_fn(
+    obs: Union[FloatTensor, np.array], action: Union[FloatTensor, np.array], next_obs: Union[FloatTensor, np.array]
+) -> BoolTensor:
     # not_terminated = (
     #         np.isfinite(next_obs).all() and next_obs[0] >= 0.2 and next_obs[0] <= 1.0
     # )

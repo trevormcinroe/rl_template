@@ -1,11 +1,14 @@
 import json
-
 import numpy as np
 import torch
+from torch import FloatTensor
+from typing import Tuple, Union, List
+from gym import Env
+from utils.scalers import StandardScaler
 
 
 class ReplayBuffer:
-    def __init__(self, capacity, obs_dim, action_dim, device):
+    def __init__(self, capacity: int, obs_dim: int, action_dim: int, device: str) -> None:
         self.capacity = capacity
         self.device = device
 
@@ -21,7 +24,7 @@ class ReplayBuffer:
         self.pointer = 0
         self.size = 0
 
-    def add(self, obs, action, reward, next_obs, not_done):
+    def add(self, obs: np.array, action: np.array, reward: float, next_obs: np.array, not_done: bool) -> None:
         np.copyto(self.states[self.pointer], obs)
         np.copyto(self.actions[self.pointer], action)
         np.copyto(self.rewards[self.pointer], reward)
@@ -31,11 +34,14 @@ class ReplayBuffer:
         self.pointer = (self.pointer + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
 
-    def add_batch(self, obses, actions, rewards, next_obses, not_dones):
+    def add_batch(self, obses: np.array, actions: np.array, rewards: np.array, next_obses: np.array,
+                  not_dones: np.array) -> None:
         for obs, action, reward, next_obs, not_done in zip(obses, actions, rewards, next_obses, not_dones):
             self.add(obs, action, reward, next_obs, not_done)
 
-    def sample(self, batch_size, rl=False):
+    def sample(
+            self, batch_size: int, rl: bool = False
+    ) -> Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor]:
         if not rl:
             ind = np.random.choice(
                 np.arange(self.size)[(self.not_dones[:self.size, :] == 1).reshape(-1)],
@@ -53,7 +59,9 @@ class ReplayBuffer:
             torch.FloatTensor(self.not_dones[ind]).to(self.device)
         )
 
-    def sample_traj(self, batch_size, episode_length, horizon):
+    def sample_traj(
+            self, batch_size: int, episode_length: int, horizon: int
+    ) -> Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor]:
         eoo = np.where(self.not_dones[:self.size] == 0)[0]
 
         # Getting indexes where eoo != 0
@@ -84,7 +92,7 @@ class ReplayBuffer:
 
         return training_batch
 
-    def get_all(self):
+    def get_all(self) -> Tuple[np.array, np.array, np.array, np.array, np.array]:
         return (
             self.states[:self.pointer],
             self.actions[:self.pointer],
@@ -93,7 +101,9 @@ class ReplayBuffer:
             self.not_dones[:self.pointer]
         )
 
-    def random_split(self, val_size, batch_size=None):
+    def random_split(
+            self, val_size: int, batch_size: Union[int, None] = None
+    ) -> Tuple[Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor], Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor]]:  # noqa
 
         if batch_size is not None:
             batch_idxs = np.random.permutation(
@@ -140,10 +150,12 @@ class ReplayBuffer:
         return training_batch, validation_batch
 
     @property
-    def n_traj(self):
+    def n_traj(self) -> np.array:
         return np.where(self.not_dones[:self.size] == 0)[0].shape[0]
 
-    def random_split_traj(self, val_size, horizon, episode_length):
+    def random_split_traj(
+            self, val_size: int, horizon: int, episode_length: int
+    ) -> Tuple[Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor], Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor]]:  # noqa
         """"""
         # TODO: what should we expect to happend when the pointer loops around?
         # First, find end of episode dones
@@ -190,7 +202,7 @@ class ReplayBuffer:
 
 
 class OfflineReplay:
-    def __init__(self, env, device, custom_filepath=None):
+    def __init__(self, env: Env, device: str, custom_filepath: Union[str, None] = None) -> None:
         import d4rl
         self.env = env
         self.device = device
@@ -225,7 +237,9 @@ class OfflineReplay:
             b_idx += 1000
             e_idx += 1000
 
-    def random_split(self, val_size, batch_size):
+    def random_split(
+            self, val_size: int, batch_size: int
+    ) -> Tuple[Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor], Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor]]:  # noqa
         # batch_idxs = np.random.permutation(self.size)[:batch_size]
         batch_idxs = np.random.permutation(
             np.arange(self.size)[(self.not_dones[:self.size, :] == 1).reshape(-1)]
@@ -249,7 +263,9 @@ class OfflineReplay:
 
         return training_batch, validation_batch
 
-    def sample(self, batch_size, rl=False):
+    def sample(
+            self, batch_size: int, rl: bool = False
+    ) -> Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor]:
         if not rl:
             ind = np.random.choice(
                 np.arange(self.size)[(self.not_dones[:self.size, :] == 1).reshape(-1)],
@@ -269,7 +285,9 @@ class OfflineReplay:
             torch.FloatTensor(self.not_dones[ind]).to(self.device)
         )
 
-    def random_split_transformer(self, val_size, batch_size, h, scaler):
+    def random_split_transformer(
+            self, val_size: int, batch_size: int, h: int, scaler: StandardScaler
+    ) -> Tuple[Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor], Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, FloatTensor]]:  # noqa
         input_batch_s = []
         input_batch_a = []
         target_batch_s = []
@@ -363,6 +381,7 @@ class OfflineReplay:
 
 
 def resize_model_replay(rollout_batch_size, model_train_frequency, horizon, model_replay, model_retain_length=1):
+    raise NotImplementedError('This function is not yet implemented correctly.')
     # TODO: 1000 is hardcoded... I'm not certain what it's actually trying to capture. It's 1k for all envs in MBPO paper
     # if 512 * 1000 / 250 -> 2048
     rollouts_per_epoch = rollout_batch_size * 1000 / model_train_frequency

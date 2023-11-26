@@ -3,10 +3,15 @@ import numpy as np
 import json
 from copy import deepcopy
 import tqdm
+from gym import Env
+from typing import Union, Tuple, Optional
+from utils.replays import ReplayBuffer
+from rl.sac import Actor
 
 
 class DatasetCollector:
-    def __init__(self, directory, environment, replay_buffer, environment_name, policy=None):
+    def __init__(self, directory: str, environment: Env, replay_buffer: ReplayBuffer, environment_name: str,
+                 policy: Union[Actor, None] = None):
         self.directory = directory
         self.env = environment
         self.replay_buffer = replay_buffer
@@ -19,11 +24,11 @@ class DatasetCollector:
         self._check_directory()
         self._initialize_dataset_directory()
 
-    def _check_directory(self):
+    def _check_directory(self) -> None:
         if not os.path.isdir(self.directory):
             raise FileNotFoundError(f'Given directory does not exist: {self.directory}')
 
-    def _initialize_dataset_directory(self):
+    def _initialize_dataset_directory(self) -> None:
         if os.path.isdir(f'{self.directory}/custom_datasets'):
             print(f'Given directory already exist: {self.directory}. /n Do you wish to override? y/n')
             choice = input()
@@ -37,27 +42,27 @@ class DatasetCollector:
         else:
             os.makedirs(f'{self.directory}/custom_datasets')
 
-    def collect(self, n=None):
-        if not n:
-            if not self.policy:
-                self._collect_with_random(self._n_collect_steps)
-
-            else:
-                self._collect_with_policy(self._n_collect_steps)
+    def collect(self) -> None:
+        # if not n:
+        #     if not self.policy:
+        #         self._collect_with_random(self._n_collect_steps)
+        #
+        #     else:
+        #         self._collect_with_policy(self._n_collect_steps)
+        #
+        # else:
+        if not self.policy:
+            self._collect_with_random(self._n_collect_steps)
 
         else:
-            if not self.policy:
-                self._collect_with_random(self._n_collect_steps)
-
-            else:
-                self._collect_with_policy(self._n_collect_steps)
+            self._collect_with_policy(self._n_collect_steps)
 
         self._extract_dataset()
 
         with open(f'{self.directory}/custom_datasets/{self.env_name}.json', 'w') as f:
             json.dump(self.dataset, f)
 
-    def _extract_dataset(self):
+    def _extract_dataset(self) -> None:
         """
         self.dataset = d4rl.qlearning_dataset(env)
         self.states = self.dataset['observations']
@@ -74,7 +79,7 @@ class DatasetCollector:
         self.dataset['rewards'] = self.replay_buffer.rewards.tolist()[:self.replay_buffer.size]
         self.dataset['terminals'] = (1 - self.replay_buffer.not_dones).tolist()[:self.replay_buffer.size]
 
-    def _collect_with_policy(self, n_collect_steps):
+    def _collect_with_policy(self, n_collect_steps: int) -> None:
         with tqdm(total=n_collect_steps) as pbar:
             collected = 0
 
@@ -90,7 +95,7 @@ class DatasetCollector:
                     pbar.update(1)
                     obs = next_obs
 
-    def _collect_with_random(self, n_collect_steps):
+    def _collect_with_random(self, n_collect_steps: int) -> None:
         with tqdm(total=n_collect_steps) as pbar:
             collected = 0
 
@@ -106,5 +111,3 @@ class DatasetCollector:
                     collected += 1
                     pbar.update(1)
                     obs = next_obs
-
-

@@ -1,7 +1,8 @@
 from torch import nn
+from typing import Union
 
 
-def get_activation(activation_name):
+def get_activation(activation_name: str) -> Union[nn.Module, ValueError]:
     """
 
     Args:
