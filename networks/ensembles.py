@@ -574,7 +574,7 @@ class DynamicsEnsemble(nn.Module):
 
     def preprocess_training_batch_traj(
             self, data: Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor, LongTensor]
-    ) -> List[FloatTensor, FloatTensor]:
+    ) -> List[FloatTensor]:
         """"""
         raise NotImplementedError('Currently this function is not fully implemented.')
         # For a trajectory, the inputs are simply the [recurrent state, action] vectors
