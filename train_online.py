@@ -175,7 +175,7 @@ if not args.model_free:
     dynamics_ens = DynamicsEnsemble(
         n_ensemble_members=7, obs_dim=state_dim, act_dim=action_dim, hidden_dims=[dyn_mlp for _ in range(4)],
         activation='elu', norm=False, dist='normal', max_logging=5000, reward_included=True, predict_difference=True,
-        batch_size=512, lr=1e-3, early_stop_patience=10, n_elites=5, terminal_fn=None, rnn=False, logger=None,
+        batch_size=512, lr=1e-3, early_stop_patience=10, n_elites=5, terminal_fn=termination_fn, rnn=False, logger=None,
         lcc=None, device=device
     )
 
