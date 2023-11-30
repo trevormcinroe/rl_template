@@ -56,13 +56,13 @@ if args.jax:
 
     params = mbpo.init(jax.random.key(0), obs, acts, True)
 
-    batch_size = 512
-    validation_ratio = 0.2
-    val_size = int(batch_size * validation_ratio)
-    train_size = batch_size - val_size
-    train_batch, val_batch = offline_replay.random_split(val_size, batch_size * 10)
-
-    print(type(mbpo.variables))
+    # batch_size = 512
+    # validation_ratio = 0.2
+    # val_size = int(batch_size * validation_ratio)
+    # train_size = batch_size - val_size
+    # train_batch, val_batch = offline_replay.random_split(val_size, batch_size * 10)
+    #
+    # print(type(mbpo.variables))
     qqq
 
     opt_state = ensemble_optim.init(params)
