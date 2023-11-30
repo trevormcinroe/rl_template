@@ -80,14 +80,14 @@ else:
     mbpo.scaler.fit(train_inputs)
     mbpo.logger = wandb
 
-    # mbpo.train_single_step(offline_replay, 0.2, 512)
+    mbpo.train_single_step(offline_replay, 0.2, 512)
     # Attempting to see if compiling the code speeds up everything...
-    batch_size = 512
-    validation_ratio = 0.2
-    val_size = int(batch_size * validation_ratio)
-    train_size = batch_size - val_size
-    train_batch, val_batch = offline_replay.random_split(val_size, batch_size * 10)
-    mbpo.train_single_step_compiled(train_batch, val_batch)
+    # batch_size = 512
+    # validation_ratio = 0.2
+    # val_size = int(batch_size * validation_ratio)
+    # train_size = batch_size - val_size
+    # train_batch, val_batch = offline_replay.random_split(val_size, batch_size * 10)
+    # mbpo.train_single_step_compiled(train_batch, val_batch)
 
 print(f'Took {time.time() - start} seconds.')
 
