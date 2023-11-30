@@ -2,15 +2,21 @@ import torch
 from torch import nn, FloatTensor, LongTensor
 import torch.nn.functional as F
 import numpy as np
-from networks.forward_models import MLP, GRU
+from networks.forward_models import MLP, GRU, MLPJAX
 from networks.distributions import DistLayer
 import torch.distributions as td
-from utils.scalers import StandardScaler
+from utils.scalers import StandardScaler, StandardScalerJAX
 from utils.replays import ReplayBuffer
 from copy import deepcopy
 from typing import Union, Callable, List, Tuple
 import wandb
 from rl.sac import Actor
+import jax
+from jax import numpy as jnp
+from flax import linen as fnn
+import optax
+from utils.data import TrainingState
+from functools import partial
 
 
 class DynamicsEnsemble(nn.Module):
@@ -294,8 +300,8 @@ class DynamicsEnsemble(nn.Module):
                 var_loss = logvars.mean(dim=[1, 2])
 
                 self.logger.log({
-                    'mse_loss': mse_loss.sum().detach().cpu().item(),
-                    'var_loss': var_loss.sum().detach().cpu().item()
+                    'training_loss': mse_loss.sum().detach().cpu().item(),
+                    # 'var_loss': var_loss.sum().detach().cpu().item()
                 })
 
                 # Summing across each member of the ensemble
@@ -318,6 +324,133 @@ class DynamicsEnsemble(nn.Module):
             self.shuffle_rows(idxs)
 
             new_val_loss = self.evaluate(val_inputs, val_targets, None)
+            self.logger.log({'eval_loss': np.mean(new_val_loss)})
+
+            # print("In Epoch {e}, \nthe model_loss is : {m}, \nthe val_loss is: {v}".format(
+            #     e=epoch, m=model_loss, v=new_val_loss)
+            # )
+
+            early_stop = self._is_early_stop(new_val_loss)
+            epoch += 1
+
+        # When we reach here, training is over!
+        # Now, let's select the new "elites"!
+        val_losses = self.evaluate(val_inputs, val_targets, None)
+        sorted_idxs = np.argsort(val_losses)
+        self.set_elites(sorted_idxs[:self.n_elites])
+        return loss_hist
+
+    @torch.compile
+    def train_single_step_compiled(self, train_batch, val_batch) -> List[float]:
+        """
+        Trains the ensemble of dynamics models with single-step predictions only!
+        Here, each member of the ensemble is guaranteed to see the different training data?
+        Args:
+            replay_buffer:
+            validation_ratio:
+            batch_size:
+            online_buffer:
+
+        Returns:
+
+        """
+
+        # data_size = min(replay_buffer.size, self.max_logging)
+        # val_size = int(batch_size * validation_ratio)
+        # train_size = batch_size - val_size
+        # # val_size = min(int(data_size * validation_ratio), self.max_logging)
+        # # train_size = data_size - val_size
+        #
+        # if online_buffer is not None:
+        #     if isinstance(online_buffer, tuple):
+        #         train_batch, val_batch = replay_buffer.random_split(val_size, batch_size * 10)
+        #
+        #         train_batch = [torch.cat((offline_item, online_item), dim=0) for offline_item, online_item in
+        #                        zip(train_batch, online_buffer)]
+        #
+        #
+        #     else:
+        #         train_batch, val_batch = replay_buffer.random_split(val_size, batch_size * 10)
+        #         train_batch_online, val_batch_online = online_buffer.random_split(val_size, batch_size * 10)
+        #
+        #         train_batch = [torch.cat((offline_item, online_item), dim=0) for offline_item, online_item in
+        #                  zip(train_batch, train_batch_online)]
+        #
+        #         val_batch = [torch.cat((offline_item, online_item), dim=0) for offline_item, online_item in
+        #                        zip(val_batch, val_batch_online)]
+        #
+        # else:
+        #     train_batch, val_batch = replay_buffer.random_split(val_size, batch_size * 10)
+        #     # train_batch, val_batch = replay_buffer.random_split(val_size)
+
+        train_inputs, train_targets = self.preprocess_training_batch(train_batch)
+        val_inputs, val_targets = self.preprocess_training_batch(val_batch)
+
+        # need to re-adjust train size in case we are querying for more examples than exist
+        train_size = train_inputs.shape[0]
+
+        # calculate mean and var used for normalizing inputs
+        # MOVED THIS TO A GLOBAL COMPUTATION IN THE OFFLINE DATA
+        # if update_scaler:
+        #     self.scaler.fit(train_inputs)
+        train_inputs, val_inputs = self.scaler.transform(train_inputs), self.scaler.transform(val_inputs)
+
+        # Entering the actual training loop
+        self.val_loss = [1e5 for _ in range(self.n_ensemble_members)]
+        epoch = 0
+        self.cnt = 0
+        early_stop = False
+
+        idxs = np.random.randint(train_size, size=[self.n_ensemble_members, train_size])
+
+        loss_hist = []
+        while not early_stop:
+            for b in range(int(np.ceil(train_size / self.batch_size))):
+                batch_idxs = idxs[:, b * self.batch_size:(b + 1) * self.batch_size]
+
+                # In the next-step prediction process, we do not sample
+                means = []
+                logvars = []
+
+                for i in range(self.n_ensemble_members):
+                    mean, logvar = self.forward_models[i](train_inputs[batch_idxs[i], :])
+                    means.append(mean.unsqueeze(0))
+                    logvars.append(logvar.unsqueeze(0))
+
+                # [n_ens, B, obs_dim + include_reward]
+                means = torch.concat(means, dim=0)
+                logvars = torch.concat(logvars, dim=0)
+
+                inv_var = torch.exp(-logvars)
+                mse_loss = (((means - train_targets[batch_idxs, :]) ** 2) * inv_var).mean(dim=[1, 2])
+                var_loss = logvars.mean(dim=[1, 2])
+
+                self.logger.log({
+                    'training_loss': mse_loss.sum().detach().cpu().item(),
+                    # 'var_loss': var_loss.sum().detach().cpu().item()
+                })
+
+                # Summing across each member of the ensemble
+                loss = (mse_loss + var_loss).sum()
+
+                for i in range(self.n_ensemble_members):
+                    loss += 0.01 * self.forward_models[i].max_logvar.sum() - 0.01 * self.forward_models[i].min_logvar.sum()
+
+                self.ensemble_optim.zero_grad()
+                loss.backward()
+                loss_hist.append(loss.item())
+                self.ensemble_optim.step()
+
+                if self.lcc:
+                    # Projecting the weight matrices back into the feasible set of the constrained optimization problem.
+                    for fm in self.forward_models:
+                        fm.apply(self.lcc)
+
+            # Shuffling the idxs
+            self.shuffle_rows(idxs)
+
+            new_val_loss = self.evaluate(val_inputs, val_targets, None)
+            self.logger.log({'eval_loss': np.mean(new_val_loss)})
 
             # print("In Epoch {e}, \nthe model_loss is : {m}, \nthe val_loss is: {v}".format(
             #     e=epoch, m=model_loss, v=new_val_loss)
@@ -761,3 +894,277 @@ class DynamicsEnsemble(nn.Module):
         # Here be trajectories
         else:
             raise NotImplementedError('RNN pathway for measure_disagreement() method is not implemented.')
+
+
+class DynamicsEnsembleJAX(fnn.Module):
+    n_ensemble_members: int
+    obs_dim: int
+    act_dim: int
+    hidden_dims: List[int]
+    activation: str
+    norm: bool
+    dist: str
+    max_logging: int
+    reward_included: bool
+    predict_difference: bool
+    batch_size: int
+    lr: float
+    early_stop_patience: int
+    n_elites: int
+    terminal_fn: Union[Callable, None]
+    rnn: bool
+    logger: wandb
+    lcc: Union[nn.Module, None]
+
+    scaler = StandardScalerJAX()
+
+    def setup(self) -> None:
+        if not self.rnn:
+            self.forward_models = [
+                MLPJAX(self.obs_dim + self.act_dim, self.hidden_dims, self.obs_dim + self.reward_included,
+                       self.activation, self.norm, self.dist)
+                for _ in range(self.n_ensemble_members)
+            ]
+        else:
+            raise NotImplementedError('RNN pathway not implemented currently.')
+
+        if not self.reward_included:
+            raise NotImplementedError('Sorry! Have to include reward-prediction!')
+
+        self.ensemble_optim = optax.adamw(learning_rate=self.lr, weight_decay=1e-5)
+        self.selected_elites = np.array([i for i in range(self.n_ensemble_members)])
+
+    def __call__(self, observations, actions, deterministic):
+        self.step(observations, actions, deterministic)
+
+    def step(self, observations, actions, deterministic):
+        obs_act = jnp.concatenate([observations, actions], -1)
+        obs_act = self.scaler.transform(obs_act)
+
+        # Unlike pytorch, jax does not have a non-gradient context manager
+        # Instead, we can simply do the below, which should stop DAG building
+        obs_act = jax.lax.stop_gradient(obs_act)
+
+        # TODO: can we use vmap to make this run more quickly?
+        # TODO: should we remove these if/else blocks??
+        if deterministic:
+            means = []
+            for i in range(self.n_ensemble_members):
+                mean, _ = self.forward_models[i](obs_act)
+                means.append(jnp.expand_dims(mean, 0))
+
+            means = jnp.concatenate(means, 0)
+            samples = means.mean(0)
+
+        else:
+            samples = []
+            means = []
+            for i in range(self.n_ensemble_members):
+                dist = self.forward_models[i](obs_act, moments=False)
+                samples.append(jnp.expand_dims(dist.sample(), 0))
+                means.append(jnp.expand_dims(dist.loc, 0))
+
+            samples = jnp.concatenate(samples, 0)
+            means = jnp.concatenate(means, 0)
+
+            # reward_penalty = self.compute_reward_penalty(means, self.reward_penalty)
+            idxs = np.random.choice(self.selected_elites, size=samples[0].shape[0])
+
+            # [B, obs_dim + reward_included] where each i \in B is from a randomly sampled ensemble member
+            samples = samples[idxs, np.arange(0, samples[0].shape[0])]
+
+        if self.reward_included:
+            rewards = samples[:, -1]
+
+        else:
+            raise NotImplementedError('Sorry!')
+
+        if self.predict_difference:
+            next_obs = samples[:, :-1] + observations
+        else:
+            next_obs = samples[:, :-1]
+
+        if not self.terminal_fn:
+            terminals = jnp.zeros_like(rewards).astype(jnp.bool_)
+        else:
+            terminals = self.terminal_fn(observations, actions, next_obs).squeeze(-1)
+
+        return next_obs, rewards, terminals, {}
+
+    # @jax.jit
+    def train_single_step(self, replay_buffer: ReplayBuffer, validation_ratio: float, batch_size: int,
+                          train_state, logger: wandb, online_buffer: ReplayBuffer = None) -> List[float]:
+        val_size = int(batch_size * validation_ratio)
+        train_size = batch_size - val_size
+
+        if online_buffer is not None:
+            if isinstance(online_buffer, tuple):
+                train_batch, val_batch = replay_buffer.random_split(val_size, batch_size * 10)
+
+                train_batch = [torch.cat((offline_item, online_item), dim=0) for offline_item, online_item in
+                               zip(train_batch, online_buffer)]
+
+
+            else:
+                train_batch, val_batch = replay_buffer.random_split(val_size, batch_size * 10)
+                train_batch_online, val_batch_online = online_buffer.random_split(val_size, batch_size * 10)
+
+                train_batch = [torch.cat((offline_item, online_item), dim=0) for offline_item, online_item in
+                               zip(train_batch, train_batch_online)]
+
+                val_batch = [torch.cat((offline_item, online_item), dim=0) for offline_item, online_item in
+                             zip(val_batch, val_batch_online)]
+
+        else:
+            train_batch, val_batch = replay_buffer.random_split(val_size, batch_size * 10)
+            # train_batch, val_batch = replay_buffer.random_split(val_size)
+
+        train_inputs, train_targets = self.preprocess_training_batch(train_batch)
+        val_inputs, val_targets = self.preprocess_training_batch(val_batch)
+
+        # need to re-adjust train size in case we are querying for more examples than exist
+        train_size = train_inputs.shape[0]
+
+        # calculate mean and var used for normalizing inputs
+        # MOVED THIS TO A GLOBAL COMPUTATION IN THE OFFLINE DATA
+        # if update_scaler:
+        #     self.scaler.fit(train_inputs)
+        train_inputs, val_inputs = self.scaler.transform(train_inputs), self.scaler.transform(val_inputs)
+
+        # Entering the actual training loop
+        val_loss = [1e5 for _ in range(self.n_ensemble_members)]
+        epoch = 0
+        cnt = 0
+        early_stop = False
+
+        idxs = np.random.randint(train_size, size=[self.n_ensemble_members, train_size])
+
+        loss_hist = []
+        while not early_stop:
+            for b in range(int(np.ceil(train_size / self.batch_size))):
+                batch_idxs = idxs[:, b * self.batch_size:(b + 1) * self.batch_size]
+
+                def _mbpo_loss(params, train_inputs, batch_idxs):
+                    means, logvars = self.apply(
+                        params, train_inputs, batch_idxs, method='all_forward_models'
+                    )
+
+                    inv_var = jnp.exp(-logvars)
+                    var_loss = logvars.mean(axis=[1, 2])
+                    mse_loss = (((means - train_targets[batch_idxs, :]) ** 2) * inv_var).mean(axis=[1, 2])
+                    loss = (mse_loss + var_loss).sum()
+                    for i in range(self.n_ensemble_members):
+                        loss += 0.01 * self.forward_models[i].max_logvar.sum() - 0.01 * self.forward_models[
+                            i].min_logvar.sum()
+
+                    return loss
+
+                loss, grads = jax.value_and_grad(_mbpo_loss)(train_state.params, train_inputs, batch_idxs)
+                updates, new_opt_state = train_state.optimizer.update(grads, train_state.opt_state, train_state.params)
+                new_params = optax.apply_updates(train_state.params, updates)
+                train_state = TrainingState(params=new_params, opt_state=new_opt_state,
+                                            optimizer=train_state.optimizer, step=train_state.step + 1)
+
+                logger.log({'training_loss': loss})
+                # Is deferring this after the grad step the safe route? Seems yes.
+                # self.logger.log({
+                #     'mse_loss': mse_loss.sum().detach().cpu().item(),
+                #     'var_loss': var_loss.sum().detach().cpu().item()
+                # })
+
+            self.shuffle_rows(idxs)
+            new_val_loss = self.apply(train_state.params, val_inputs, val_targets, None, method='evaluate')
+            logger.log({'eval_loss': jnp.mean(new_val_loss)})
+            early_stop, val_loss, cnt = self._is_early_stop(val_loss, new_val_loss, cnt)
+            epoch += 1
+
+        # When we reach here, training is over!
+        # Now, let's select the new "elites"!
+        val_losses = self.evaluate(val_inputs, val_targets, None)
+        sorted_idxs = np.argsort(val_losses)
+        # self.set_elites(sorted_idxs[:self.n_elites])
+        # return loss_hist
+        print(f'Success!')
+
+    @jax.jit
+    def all_forward_models(self, train_inputs, batch_idxs):
+        means = []
+        logvars = []
+
+        for i in range(self.n_ensemble_members):
+            mean, logvar = self.forward_models[i](train_inputs[batch_idxs[i], :])
+            means.append(jnp.expand_dims(mean, 0))
+            logvars.append(jnp.expand_dims(logvar, 0))
+
+        # [n_ens, B, obs_dim + include_reward]
+        means = jnp.concatenate(means, 0)
+        logvars = jnp.concatenate(logvars, 0)
+
+        return means, logvars
+
+    def evaluate(self, inputs, targets, idxs):
+        inputs = jax.lax.stop_gradient(inputs)
+
+        if idxs is not None:
+            means = []
+            for i in range(self.n_ensemble_members):
+                mean, _ = self.forward_models[i](inputs[idxs[i, :self.max_logging]])
+                means.append(jnp.expand_dims(mean, 0))
+
+            means = jnp.concatenate(means, 0)
+            loss = ((means - targets) ** 2).mean(axis=[1, 2])
+
+        else:
+            means = []
+            for i in range(self.n_ensemble_members):
+                mean, _ = self.forward_models[i](inputs)
+                means.append(jnp.expand_dims(mean, 0))
+
+            means = jnp.concatenate(means, 0)
+            loss = ((means - targets) ** 2).mean(axis=[1, 2])
+
+        return loss
+
+    def _is_early_stop(self, curr_val_loss, new_val_loss, cnt):
+        changed = False
+        for i, old_loss, new_loss in zip(range(len(curr_val_loss)), curr_val_loss, new_val_loss):
+            if (old_loss - new_loss) / old_loss > 0.01:
+                changed = True
+                curr_val_loss[i] = new_loss
+
+        if changed:
+            cnt = 0
+        else:
+            cnt += 1
+
+        if cnt >= self.early_stop_patience:
+            return True, curr_val_loss, cnt
+        else:
+            return False, curr_val_loss, cnt
+
+    def preprocess_training_batch(self, data):
+        states, actions, next_states, rewards, not_dones = data
+
+        inputs = jnp.concatenate([states, actions], -1)
+
+        if self.predict_difference:
+            target_state = next_states - states
+
+        else:
+            target_state = next_states
+
+        if self.reward_included:
+            target = jnp.concatenate([target_state, rewards], -1)
+
+        else:
+            target = target_state
+
+        return inputs, target
+
+    @staticmethod
+    def shuffle_rows(arr: np.array) -> np.array:
+        """ Shuffle among rows. This will keep distinct training for each ensemble."""
+        idxs = np.argsort(np.random.uniform(size=arr.shape), axis=-1)
+        return arr[np.arange(arr.shape[0])[:, None], idxs]
+
+

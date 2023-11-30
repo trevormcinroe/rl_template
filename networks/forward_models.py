@@ -1,8 +1,11 @@
 import torch
 from torch import nn, FloatTensor, Tensor
-from networks.utils.activations import get_activation
-from networks.distributions import DistLayer
+from networks.utils.activations import get_activation, get_activation_jax
+from networks.distributions import DistLayer, DistLayerJAX
 from typing import List, Union, Tuple
+from flax import linen as fnn
+import jax
+from jax import numpy as jnp
 
 
 class MLP(nn.Module):
@@ -101,3 +104,44 @@ class GRU(nn.Module):
             output = self.dist_layer(output, moments)
 
         return output
+
+
+class MLPJAX(fnn.Module):
+    input_shape: int
+    hidden_dims: List[int]
+    output_shape: int
+    activation: str
+    norm: bool
+    dist: bool
+
+    def setup(self) -> None:
+        layers = [fnn.Dense(self.hidden_dims[0])]
+
+        for i in range(1, len(self.hidden_dims)):
+            if self.norm:
+                layers.append(fnn.LayerNorm())
+
+            layers.append(get_activation_jax(self.activation))
+            layers.append(fnn.Dense(self.hidden_dims[i]))
+
+        layers.append(get_activation_jax(self.activation))
+        self.layers = fnn.Sequential(layers)
+
+        if self.dist:
+            self.dist_layers = DistLayerJAX(self.hidden_dims[-1], self.output_shape, self.dist)
+
+    @property
+    def min_logvar(self):
+        return self.dist_layers.variables['params']['min_logvar']
+
+    @property
+    def max_logvar(self):
+        return self.dist_layers.variables['params']['max_logvar']
+
+    def __call__(self, x, moments=True):
+        x = self.layers(x)
+
+        if self.dist:
+            x = self.dist_layers(x, moments)
+
+        return x

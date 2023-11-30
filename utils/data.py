@@ -7,6 +7,9 @@ from copy import deepcopy
 from typing import Union, List, Tuple
 from utils.replays import ReplayBuffer
 from utils.scalers import StandardScaler
+from typing import NamedTuple, Dict
+import optax
+from jax import numpy as jnp
 
 
 def preprocess_sac_batch_oto(offline_buffer: ReplayBuffer, model_buffer: ReplayBuffer, online_buffer: ReplayBuffer,
@@ -74,3 +77,12 @@ def symlog(x: FloatTensor) -> FloatTensor:
 
 def inv_symlog(x: FloatTensor) -> FloatTensor:
     return torch.sign(x) * (torch.exp(x.abs()) - 1)
+
+
+class TrainingState(NamedTuple):
+    """Container for the training state."""
+
+    params: Dict
+    opt_state: optax.OptState
+    optimizer: optax.GradientTransformation
+    step: jnp.array

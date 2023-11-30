@@ -4,6 +4,11 @@ import torch.nn.functional as F
 import torch.distributions as td
 import math
 from typing import Union, List
+import jax
+from jax import numpy as jnp
+from flax import linen as fnn
+import distrax
+# from rlax._src.distributions import squashed_gaussian
 
 
 class DistLayer(nn.Module):
@@ -116,3 +121,81 @@ class SquashedNormal(td.transformed_distribution.TransformedDistribution):
 
     def entropy(self) -> FloatTensor:
         return self.base_dist.entropy()
+
+
+class DistLayerJAX(fnn.Module):
+    input_shape: int
+    output_shape: int
+    dist: str
+
+    def setup(self) -> None:
+        self.lin_proj = fnn.Dense(self.output_shape)
+
+        if self.dist in ['normal', 'trunc_normal']:
+            self.std_proj = fnn.Dense(self.output_shape)
+
+            self.min_logvar = self.param('min_logvar', fnn.initializers.constant(-10), self.output_shape)
+            self.max_logvar = self.param('max_logvar', fnn.initializers.constant(0.5), self.output_shape)
+
+    def __call__(self, x: FloatTensor, moments: bool):
+        mu = self.lin_proj(x)
+
+        if self.dist == 'normal':
+            logvar = self.std_proj(x)
+            logvar = self.max_logvar - fnn.softplus(self.max_logvar - logvar)
+            logvar = self.min_logvar + fnn.softplus(logvar - self.min_logvar)
+
+            if moments:
+                return mu, logvar
+            else:
+                dist = distrax.Normal(mu, jnp.sqrt(jnp.exp(logvar)))
+                return dist
+
+        elif self.dist == 'mse':
+            if moments:
+                return mu, 1
+            else:
+                dist = distrax.Normal(mu, 1.0)
+                return dist
+
+        elif self.dist == 'trunc_normal':
+            logvar = self.std_proj(x)
+            logvar = self.max_logvar - fnn.softplus(self.max_logvar - logvar)
+            logvar = self.min_logvar + fnn.softplus(logvar - self.min_logvar)
+
+            if moments:
+                return mu, logvar
+            else:
+                dist = SquashedNormalJAX(mu, jnp.sqrt(jnp.exp(logvar)))
+                return dist
+
+
+class SquashedNormalJAX(distrax.Transformed):
+    """Code taken from: https://github.com/Howuhh/sac-n-jax/blob/main/sac_n_jax_flax.py#L91"""
+    def __init__(self, loc, scale):
+        normal_dist = distrax.Normal(loc, scale)
+        tanh_bijector = distrax.Tanh()
+        super().__init__(distribution=normal_dist, bijector=tanh_bijector)
+
+    def mean(self):
+        return self.bijector.forward(self.distribution.mean())
+
+# distrax.
+# test = DistLayerJAX(32, 2, 'trunc_normal')
+# print(test)
+#
+# x = jax.random.normal(jax.random.PRNGKey(42), (10, 32))
+# print(x.shape)
+# variables = test.init(jax.random.key(0), x, moments=False)
+# # print(f'VARS: {variables}')
+# # print('VARS:')
+# # for k, v in variables['params'].items():
+# #     print(k)
+# mu, logvar = test.apply(variables, x, moments=True)
+# print(mu)
+# print()
+# print(logvar)
+#
+# dist = test.apply(variables, x, moments=False)
+# print(dist)
+# print(dist.sample(seed=42))
