@@ -22,19 +22,19 @@ args.add_argument('--jax', action='store_true')
 args = args.parse_args()
 
 """LOGGING"""
-with open('../wandb.txt', 'r') as f:
-    API_KEY = json.load(f)['api_key']
-
-import os
-os.environ['WANDB_API_KEY'] = API_KEY
-os.environ['WANDB_DIR'] = './wandb'
-os.environ['WANDB_CONFIG_DIR'] = './wandb'
-
-wandb.init(
-            project='jax-testing',
-            entity='trevor-mcinroe',
-            name=f'{"jax" if args.jax else "torch"}-hcrandom-mbpo-training',
-        )
+# with open('../wandb.txt', 'r') as f:
+#     API_KEY = json.load(f)['api_key']
+#
+# import os
+# os.environ['WANDB_API_KEY'] = API_KEY
+# os.environ['WANDB_DIR'] = './wandb'
+# os.environ['WANDB_CONFIG_DIR'] = './wandb'
+#
+# wandb.init(
+#             project='jax-testing',
+#             entity='trevor-mcinroe',
+#             name=f'{"jax" if args.jax else "torch"}-hcrandom-mbpo-training',
+#         )
 
 
 env = gym.make('halfcheetah-random-v2')
@@ -55,6 +55,15 @@ if args.jax:
     mbpo.scaler.fit(jnp.concatenate([obs, acts], -1))
 
     params = mbpo.init(jax.random.key(0), obs, acts, True)
+
+    batch_size = 512
+    validation_ratio = 0.2
+    val_size = int(batch_size * validation_ratio)
+    train_size = batch_size - val_size
+    train_batch, val_batch = offline_replay.random_split(val_size, batch_size * 10)
+
+    print(type(mbpo.variables))
+    qqq
 
     opt_state = ensemble_optim.init(params)
     # print(opt_state)
