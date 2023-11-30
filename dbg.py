@@ -67,7 +67,7 @@ if args.jax:
     mbpo.apply(params, offline_replay, 0.2, 512, training_state, wandb, method='train_single_step')
 
 else:
-    device = 'cuda'
+    device = 'cpu'
     offline_replay = OfflineReplay(env, device)
 
     mbpo = DynamicsEnsemble(
