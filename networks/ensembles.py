@@ -992,6 +992,20 @@ class DynamicsEnsembleJAX(fnn.Module):
         return next_obs, rewards, terminals, {}
 
     # @jax.jit
+    def _mbpo_loss_method(self, params, train_inputs, batch_idxs):
+        means, logvars = self.apply(
+            params, train_inputs, batch_idxs, method='all_forward_models'
+        )
+
+        inv_var = jnp.exp(-logvars)
+        var_loss = logvars.mean(axis=[1, 2])
+        mse_loss = (((means - train_targets[batch_idxs, :]) ** 2) * inv_var).mean(axis=[1, 2])
+        loss = (mse_loss + var_loss).sum()
+        for i in range(model.n_ensemble_members):
+            loss += 0.01 * model.forward_models[i].max_logvar.sum() - 0.01 * model.forward_models[
+                i].min_logvar.sum()
+
+        return loss
     def train_single_step(self, replay_buffer: ReplayBuffer, validation_ratio: float, batch_size: int,
                           train_state, logger: wandb, online_buffer: ReplayBuffer = None) -> List[float]:
         val_size = int(batch_size * validation_ratio)
@@ -1044,7 +1058,7 @@ class DynamicsEnsembleJAX(fnn.Module):
             for b in range(int(np.ceil(train_size / self.batch_size))):
                 batch_idxs = idxs[:, b * self.batch_size:(b + 1) * self.batch_size]
 
-                def _mbpo_loss(params, train_inputs, batch_idxs):
+                def _mbpo_loss(params, train_inputs, train_targets, batch_idxs):
                     means, logvars = self.apply(
                         params, train_inputs, batch_idxs, method='all_forward_models'
                     )
@@ -1059,7 +1073,7 @@ class DynamicsEnsembleJAX(fnn.Module):
 
                     return loss
 
-                loss, grads = jax.value_and_grad(_mbpo_loss)(train_state.params, train_inputs, batch_idxs)
+                loss, grads = jax.value_and_grad(_mbpo_loss)(train_state.params, train_inputs, train_targets, batch_idxs)
                 updates, new_opt_state = train_state.optimizer.update(grads, train_state.opt_state, train_state.params)
                 new_params = optax.apply_updates(train_state.params, updates)
                 train_state = TrainingState(params=new_params, opt_state=new_opt_state,
@@ -1086,7 +1100,7 @@ class DynamicsEnsembleJAX(fnn.Module):
         # return loss_hist
         print(f'Success!')
 
-    @jax.jit
+    # @jax.jit
     def all_forward_models(self, train_inputs, batch_idxs):
         means = []
         logvars = []

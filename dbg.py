@@ -14,6 +14,7 @@ import json
 import optax
 from utils.data import TrainingState
 import time
+import numpy as np
 
 
 import argparse
@@ -22,19 +23,19 @@ args.add_argument('--jax', action='store_true')
 args = args.parse_args()
 
 """LOGGING"""
-# with open('../wandb.txt', 'r') as f:
-#     API_KEY = json.load(f)['api_key']
-#
-# import os
-# os.environ['WANDB_API_KEY'] = API_KEY
-# os.environ['WANDB_DIR'] = './wandb'
-# os.environ['WANDB_CONFIG_DIR'] = './wandb'
-#
-# wandb.init(
-#             project='jax-testing',
-#             entity='trevor-mcinroe',
-#             name=f'{"jax" if args.jax else "torch"}-hcrandom-mbpo-training',
-#         )
+with open('../wandb.txt', 'r') as f:
+    API_KEY = json.load(f)['api_key']
+
+import os
+os.environ['WANDB_API_KEY'] = API_KEY
+os.environ['WANDB_DIR'] = './wandb'
+os.environ['WANDB_CONFIG_DIR'] = './wandb'
+
+wandb.init(
+            project='jax-testing',
+            entity='trevor-mcinroe',
+            name=f'{"jax" if args.jax else "torch"}-hcrandom-mbpo-training',
+        )
 
 
 env = gym.make('halfcheetah-random-v2')
@@ -52,18 +53,12 @@ if args.jax:
                                50000, True, True, 512, 1e-3, 10, 5, None, False, None, None)
 
     ensemble_optim = optax.chain(optax.adamw(learning_rate=1e-3, weight_decay=1e-5))
+
+    train_batch, _ = offline_replay.random_split(0, offline_replay.size)
+    train_inputs, _ = mbpo.preprocess_training_batch(train_batch)
     mbpo.scaler.fit(jnp.concatenate([obs, acts], -1))
 
     params = mbpo.init(jax.random.key(0), obs, acts, True)
-
-    # batch_size = 512
-    # validation_ratio = 0.2
-    # val_size = int(batch_size * validation_ratio)
-    # train_size = batch_size - val_size
-    # train_batch, val_batch = offline_replay.random_split(val_size, batch_size * 10)
-    #
-    # print(type(mbpo.variables))
-    qqq
 
     opt_state = ensemble_optim.init(params)
     # print(opt_state)
@@ -72,6 +67,63 @@ if args.jax:
     training_state = TrainingState(params=params, opt_state=opt_state, optimizer=ensemble_optim, step=jnp.array(0))
 
     # next_obs, rewards, terms, _ = mbpo.apply(params, obs, acts, True, method='step')
+
+    # """TRYING TO JIT FUNCTION!"""
+    # batch_size = 512
+    # validation_ratio = 0.2
+    # val_size = int(batch_size * validation_ratio)
+    # train_size = batch_size - val_size
+    # train_batch, val_batch = offline_replay.random_split(val_size, batch_size * 10)
+    #
+    # def _train_mbpo_jax(model, training_state, train_batch, val_batch):
+    #     train_inputs, train_targets = model.preprocess_training_batch(train_batch)
+    #     val_inputs, val_targets = model.preprocess_training_batch(val_batch)
+    #     train_size = train_inputs.shape[0]
+    #     train_inputs, val_inputs = model.scaler.transform(train_inputs), model.scaler.transform(val_inputs)
+    #
+    #     val_loss = [1e5 for _ in range(model.n_ensemble_members)]
+    #     epoch = 0
+    #     cnt = 0
+    #     early_stop = False
+    #
+    #     idxs = np.random.randint(train_size, size=[model.n_ensemble_members, train_size])
+    #
+    #     while not early_stop:
+    #         for b in range(int(np.ceil(train_size / model.batch_size))):
+    #             batch_idxs = idxs[:, b * model.batch_size:(b + 1) * model.batch_size]
+    #
+    #             # Model forward pass and grad computation
+    #             def _mbpo_loss(params, train_inputs, batch_idxs):
+    #                 means, logvars = model.apply(
+    #                     params, train_inputs, batch_idxs, method='all_forward_models'
+    #                 )
+    #
+    #                 inv_var = jnp.exp(-logvars)
+    #                 var_loss = logvars.mean(axis=[1, 2])
+    #                 mse_loss = (((means - train_targets[batch_idxs, :]) ** 2) * inv_var).mean(axis=[1, 2])
+    #                 loss = (mse_loss + var_loss).sum()
+    #                 for i in range(model.n_ensemble_members):
+    #                     loss += 0.01 * model.forward_models[i].max_logvar.sum() - 0.01 * model.forward_models[
+    #                         i].min_logvar.sum()
+    #
+    #                 return loss
+    #
+    #             loss, grads = jax.value_and_grad(_mbpo_loss)(training_state.params, train_inputs, batch_idxs)
+    #             updates, new_opt_state = training_state.optimizer.update(grads, training_state.opt_state,
+    #                                                                      training_state.params)
+    #             new_params = optax.apply_updates(training_state.params, updates)
+    #             train_state = TrainingState(params=new_params, opt_state=new_opt_state,
+    #                                         optimizer=training_state.optimizer, step=training_state.step + 1)
+    #
+    #             model.logger.log({'training_loss': loss})
+    #
+    #         model.shuffle_rows(idxs)
+    #         new_val_loss = model.apply(training_state.params, val_inputs, val_targets, None, method='evaluate')
+    #         model.logger.log({'eval_loss': jnp.mean(new_val_loss)})
+    #         early_stop, val_loss, cnt = model._is_early_stop(val_loss, new_val_loss, cnt)
+    #         epoch += 1
+    #
+    # _train_mbpo_jax(mbpo, training_state, train_batch, val_batch)
 
     mbpo.apply(params, offline_replay, 0.2, 512, training_state, wandb, method='train_single_step')
 
